@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Company Messaging - Envoi WhatsApp</title>
+    <style>
+        :root {
+            --bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --surface: #ffffff;
+            --text: #1a202c;
+            --text-light: #4a5568;
+            --muted: #718096;
+            --border: #e2e8f0;
+            --border-strong: #cbd5e0;
+            --primary: #667eea;
+            --primary-hover: #5568d3;
+            --primary-light: #eef2ff;
+            --accent: #f8fafc;
+            --danger: #ef4444;
+            --success: #10b981;
+            --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 920px;
+            margin: 0 auto;
+            background: var(--surface);
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 40px 36px;
+            border-bottom: none;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: #ffffff;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 15px;
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: 400;
+        }
+
+        .content {
+            padding: 32px 36px 44px;
+        }
+
+        .section {
+            padding: 28px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section:last-child { border-bottom: none; padding-bottom: 0; }
+
+        .section-title {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            margin-bottom: 18px;
+            font-weight: 600;
+        }
+
+        .help {
+            font-size: 14px;
+            color: var(--text-light);
+            line-height: 1.5;
+        }
+
+        .upload-area {
+            border: 2px dashed #cbd5e0;
+            background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .upload-area::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .upload-area:hover::before {
+            opacity: 1;
+        }
+
+        .upload-area:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .upload-area.dragover {
+            border-color: var(--primary);
+            background: var(--primary-light);
+            border-style: solid;
+            transform: scale(1.02);
+        }
+
+        .upload-area input[type="file"] { display: none; }
+
+        .stats {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        .stat-card {
+            padding: 24px;
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            border: 1px solid var(--border);
+            text-align: center;
+            border-radius: 12px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .stat-card:hover {
+            box-shadow: var(--shadow-md);
+            transform: translateY(-4px);
+            border-color: var(--primary);
+        }
+
+        .stat-card h3 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-card p {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 500;
+        }
+
+        .invalid-numbers {
+            margin-top: 16px;
+            padding: 14px;
+            border: 1px solid var(--border);
+            background: #fafafa;
+            display: none;
+        }
+
+        .invalid-numbers.show { display: block; }
+
+        .invalid-numbers h4 {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: var(--danger);
+        }
+
+        .invalid-numbers ul {
+            list-style: none;
+            padding: 0;
+            max-height: 180px;
+            overflow-y: auto;
+        }
+
+        .invalid-numbers li {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            color: #374151;
+            background: white;
+            border: 1px solid var(--border);
+            padding: 8px 10px;
+            margin: 6px 0;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 160px;
+            padding: 16px;
+            border: 2px solid var(--border);
+            font-size: 15px;
+            line-height: 1.6;
+            font-family: inherit;
+            resize: vertical;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 12px;
+            background: white;
+        }
+
+        textarea:hover {
+            border-color: var(--border-strong);
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+            transform: translateY(-1px);
+        }
+
+        .file-input-wrapper {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+
+        .file-input-wrapper input[type="file"] { display: none; }
+
+        .file-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 20px;
+            border: 2px solid var(--primary);
+            background: white;
+            color: var(--primary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 10px;
+            font-weight: 600;
+        }
+
+        .file-btn:hover {
+            background: var(--primary);
+            color: white;
+            box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
+        }
+
+        .file-btn:active {
+            transform: translateY(0);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .preview-files {
+            margin-top: 14px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .preview-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            border: 2px solid var(--border);
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            font-size: 13px;
+            color: #374151;
+            max-width: 100%;
+            border-radius: 10px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .preview-item:hover {
+            background: white;
+            box-shadow: var(--shadow-md);
+            border-color: var(--primary);
+            transform: translateX(4px);
+        }
+
+        .preview-item span:first-child {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 520px;
+        }
+
+        .preview-item .remove {
+            margin-left: auto;
+            cursor: pointer;
+            color: var(--muted);
+            padding: 6px 10px;
+            border: 2px solid transparent;
+            user-select: none;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+
+        .preview-item .remove:hover {
+            color: var(--danger);
+            border-color: var(--danger);
+            background: rgba(239, 68, 68, 0.1);
+            transform: scale(1.05);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 16px 32px;
+            font-size: 15px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            letter-spacing: 0.5px;
+            border-radius: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn:hover:not(:disabled) { 
+            background: linear-gradient(135deg, #5568d3 0%, #6a3d8f 100%);
+            box-shadow: var(--shadow-lg);
+            transform: translateY(-3px);
+        }
+
+        .btn:active:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn:disabled { 
+            opacity: 0.6; 
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: none;
+            padding: 20px 0 0;
+        }
+
+        .loading.show { display: block; }
+
+        .spinner {
+            border: 2px solid var(--border);
+            border-top: 2px solid var(--text);
+            border-radius: 50%;
+            width: 22px;
+            height: 22px;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .alert {
+            display: none;
+            padding: 16px 20px;
+            border: 2px solid var(--border);
+            background: white;
+            color: var(--text);
+            margin-bottom: 20px;
+            font-size: 14px;
+            border-radius: 12px;
+            border-left-width: 6px;
+            animation: slideIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .alert.show { display: block; }
+
+        .alert-success {
+            border-left-color: var(--success);
+            background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+        }
+
+        .alert-danger {
+            border-left-color: var(--danger);
+            background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+        }
+
+        .alert-info {
+            border-left-color: var(--primary);
+            background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+        }
+
+        @media (max-width: 720px) {
+            .content { padding: 22px 16px 30px; }
+            .header { padding: 22px 16px; }
+            .stats { grid-template-columns: 1fr; }
+            .stat-card { border-right: none; border-bottom: 1px solid var(--border); }
+            .stat-card:last-child { border-bottom: none; }
+            .preview-item span:first-child { max-width: 240px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Company Messaging</h1>
+            <p>Envoi WhatsApp en masse à partir d’un fichier CSV</p>
+        </div>
+
+        <div class="content">
+            <div id="alertSuccess" class="alert alert-success"></div>
+            <div id="alertError" class="alert alert-danger"></div>
+            <div id="alertInfo" class="alert alert-info"></div>
+
+            <div class="section">
+                <div class="section-title">1. Charger les numéros (CSV)</div>
+                <div class="upload-area" id="uploadArea">
+                    <input type="file" id="csvFile" accept=".csv" />
+                    <div class="help">Cliquez ou glissez-déposez votre fichier CSV ici</div>
+                    <div class="help" style="margin-top: 6px;">Le fichier doit contenir une colonne <strong>phone</strong></div>
+                </div>
+
+                <div class="stats" style="margin-top: 16px; display: none;" id="statsContainer">
+                    <div class="stat-card">
+                        <h3 id="validCount">0</h3>
+                        <p>Valides</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="invalidCount">0</h3>
+                        <p>Invalides</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3 id="totalCount">0</h3>
+                        <p>Total</p>
+                    </div>
+                </div>
+
+                <div class="invalid-numbers" id="invalidNumbers">
+                    <h4>Numéros invalides</h4>
+                    <ul id="invalidNumbersList"></ul>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">2. Composer le message</div>
+                <textarea id="messageText" placeholder="Écrivez votre message ici..."></textarea>
+
+                <div class="file-input-wrapper">
+                    <label for="imageFile" class="file-btn">
+                        Joindre une image
+                        <input type="file" id="imageFile" accept="image/*" />
+                    </label>
+                    <label for="documentFile" class="file-btn">
+                        Joindre un document
+                        <input type="file" id="documentFile" accept=".pdf,.doc,.docx,.xls,.xlsx" />
+                    </label>
+                </div>
+
+                <div class="preview-files" id="previewFiles"></div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">3. Envoyer</div>
+                <button class="btn" id="sendBtn" onclick="sendMessages()" disabled>
+                    Envoyer à tous les numéros
+                </button>
+
+                <div class="loading" id="loadingIndicator">
+                    <span class="spinner"></span>
+                    <span class="help">Envoi en cours...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let validPhones = [];
+        let invalidPhones = [];
+        let selectedImage = null;
+        let selectedDocument = null;
+
+        const uploadArea = document.getElementById('uploadArea');
+        const csvFileInput = document.getElementById('csvFile');
+
+        uploadArea.addEventListener('click', () => csvFileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                csvFileInput.files = files;
+                handleCSVUpload(files[0]);
+            }
+        });
+
+        csvFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleCSVUpload(e.target.files[0]);
+            }
+        });
+
+        function handleCSVUpload(file) {
+            if (!file || !file.name.toLowerCase().endsWith('.csv')) {
+                showAlert('error', 'Veuillez sélectionner un fichier CSV valide.');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                const text = e.target.result;
+                parseCSV(text);
+            };
+            reader.readAsText(file);
+        }
+
+        function parseCSV(text) {
+            const lines = String(text)
+                .split(/\r?\n/)
+                .map(l => l.trim())
+                .filter(Boolean);
+
+            if (lines.length === 0) {
+                showAlert('error', 'Le fichier CSV est vide.');
+                return;
+            }
+
+            const header = lines[0].split(/[,;]/).map(c => c.trim().toLowerCase());
+            const phoneIndex = header.findIndex(col => col === 'phone' || col === 'telephone' || col === 'numero');
+
+            if (phoneIndex === -1) {
+                showAlert('error', 'Le fichier CSV doit contenir une colonne "phone".');
+                return;
+            }
+
+            validPhones = [];
+            invalidPhones = [];
+
+            for (let i = 1; i < lines.length; i++) {
+                const columns = lines[i].split(/[,;]/);
+                if (columns.length <= phoneIndex) continue;
+                const phone = (columns[phoneIndex] || '').trim();
+                if (!phone) continue;
+
+                if (validatePhoneNumber(phone)) {
+                    validPhones.push(phone);
+                } else {
+                    invalidPhones.push(phone);
+                }
+            }
+
+            displayStats();
+            showAlert('success', `${validPhones.length} numéros valides chargés.`);
+        }
+
+        function validatePhoneNumber(phone) {
+            const cleaned = String(phone).replace(/[\s\-\(\)]/g, '');
+            const regex = /^(\+|00)?[0-9]{8,15}$/;
+            return regex.test(cleaned);
+        }
+
+        function displayStats() {
+            document.getElementById('validCount').textContent = String(validPhones.length);
+            document.getElementById('invalidCount').textContent = String(invalidPhones.length);
+            document.getElementById('totalCount').textContent = String(validPhones.length + invalidPhones.length);
+            document.getElementById('statsContainer').style.display = 'grid';
+
+            if (invalidPhones.length > 0) {
+                const invalidNumbersList = document.getElementById('invalidNumbersList');
+                invalidNumbersList.innerHTML = '';
+                invalidPhones.forEach(phone => {
+                    const li = document.createElement('li');
+                    li.textContent = phone;
+                    invalidNumbersList.appendChild(li);
+                });
+                document.getElementById('invalidNumbers').classList.add('show');
+            } else {
+                document.getElementById('invalidNumbers').classList.remove('show');
+            }
+
+            document.getElementById('sendBtn').disabled = validPhones.length === 0;
+        }
+
+        document.getElementById('imageFile').addEventListener('change', function (e) {
+            if (e.target.files.length > 0) {
+                selectedImage = e.target.files[0];
+                updatePreview();
+            }
+        });
+
+        document.getElementById('documentFile').addEventListener('change', function (e) {
+            if (e.target.files.length > 0) {
+                selectedDocument = e.target.files[0];
+                updatePreview();
+            }
+        });
+
+        function updatePreview() {
+            const previewFiles = document.getElementById('previewFiles');
+            previewFiles.innerHTML = '';
+
+            if (selectedImage) {
+                const div = document.createElement('div');
+                div.className = 'preview-item';
+                div.innerHTML = `
+                    <span>${escapeHtml(selectedImage.name)}</span>
+                    <span class="remove" onclick="removeImage()">×</span>
+                `;
+                previewFiles.appendChild(div);
+            }
+
+            if (selectedDocument) {
+                const div = document.createElement('div');
+                div.className = 'preview-item';
+                div.innerHTML = `
+                    <span>${escapeHtml(selectedDocument.name)}</span>
+                    <span class="remove" onclick="removeDocument()">×</span>
+                `;
+                previewFiles.appendChild(div);
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function removeImage() {
+            selectedImage = null;
+            document.getElementById('imageFile').value = '';
+            updatePreview();
+        }
+
+        function removeDocument() {
+            selectedDocument = null;
+            document.getElementById('documentFile').value = '';
+            updatePreview();
+        }
+
+        async function sendMessages() {
+            const message = document.getElementById('messageText').value.trim();
+
+            if (!message) {
+                showAlert('error', 'Veuillez écrire un message.');
+                return;
+            }
+
+            if (validPhones.length === 0) {
+                showAlert('error', 'Aucun numéro valide à envoyer.');
+                return;
+            }
+
+            document.getElementById('loadingIndicator').classList.add('show');
+            document.getElementById('sendBtn').disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('message', message);
+                formData.append('phones', JSON.stringify(validPhones));
+
+                if (selectedImage) {
+                    formData.append('image', selectedImage);
+                }
+                if (selectedDocument) {
+                    formData.append('document', selectedDocument);
+                }
+
+                const response = await fetch('/api/send-bulk', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.ok) {
+                    const sent = result.sent ?? validPhones.length;
+                    const failed = result.failed ?? 0;
+                    showAlert('success', `Envoi terminé. Envoyés: ${sent}. Échecs: ${failed}.`);
+                    resetForm();
+                } else {
+                    showAlert('error', `Erreur: ${result.error || 'Erreur inconnue'}`);
+                }
+            } catch (error) {
+                showAlert('error', `Erreur de connexion: ${error.message}`);
+            } finally {
+                document.getElementById('loadingIndicator').classList.remove('show');
+                document.getElementById('sendBtn').disabled = (validPhones.length === 0);
+            }
+        }
+
+        function showAlert(type, message) {
+            const alertTypes = ['success', 'error', 'info'];
+            alertTypes.forEach(t => {
+                const el = document.getElementById(`alert${t.charAt(0).toUpperCase() + t.slice(1)}`);
+                el.classList.remove('show');
+            });
+
+            const alertEl = document.getElementById(`alert${type.charAt(0).toUpperCase() + type.slice(1)}`);
+            alertEl.textContent = message;
+            alertEl.classList.add('show');
+
+            setTimeout(() => {
+                alertEl.classList.remove('show');
+            }, 6000);
+        }
+
+        function resetForm() {
+            document.getElementById('messageText').value = '';
+            document.getElementById('csvFile').value = '';
+            document.getElementById('imageFile').value = '';
+            document.getElementById('documentFile').value = '';
+            selectedImage = null;
+            selectedDocument = null;
+            validPhones = [];
+            invalidPhones = [];
+            updatePreview();
+            document.getElementById('statsContainer').style.display = 'none';
+            document.getElementById('invalidNumbers').classList.remove('show');
+            document.getElementById('sendBtn').disabled = true;
+        }
+    </script>
+</body>
+</html>
