@@ -444,10 +444,6 @@
 
       logsList.innerHTML = errors.map(log => {
         const timestamp = new Date(log.timestamp).toLocaleString('fr-FR');
-        const tel = log?.request?.tel ? escapeHtml(String(log.request.tel)) : '';
-        const source = log?.request?.source ? escapeHtml(String(log.request.source)) : '';
-        const endpoint = log?.request?.endpoint ? escapeHtml(String(log.request.endpoint)) : '';
-        const where = [endpoint, source].filter(Boolean).join(' ');
         
         return `
           <div class="log-entry error">
@@ -456,8 +452,8 @@
               <span class="log-timestamp">${timestamp}</span>
             </div>
             <div class="log-content">
-              ${(tel || where) ? `<div class="log-section"><h4>📌 Contexte</h4><pre>${[tel ? `tel: ${tel}` : '', where ? `source: ${where}` : ''].filter(Boolean).join('\n')}</pre></div>` : ''}
-              ${log.error ? `<div class="error-message">⚠️ ${escapeHtml(String(log.error))}</div>` : ''}
+              ${log.request ? `<div class="log-section"><h4>📤 Requête</h4><pre>${JSON.stringify(log.request, null, 2)}</pre></div>` : ''}
+              ${log.error ? `<div class="error-message">⚠️ ${log.error}</div>` : ''}
             </div>
           </div>
         `;

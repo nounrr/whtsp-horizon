@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Envoyer un message WhatsApp</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h2 { text-align: center; }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        textarea {
+            resize: vertical;
+            height: 100px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #25D366; /* WhatsApp Green */
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:hover { background-color: #128C7E; }
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            display: none;
+            border-radius: 4px;
+        }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h2>Envoyer des messages WhatsApp (Batch)</h2>
+    <div class="form-group">
+        <label for="csvFile">Fichier CSV (Numéros de téléphone) :</label>
+        <input type="file" id="csvFile" accept=".csv">
+        <small id="fileStats" style="display:block; margin-top:5px; color:#555;"></small>
+    </div>
+    <div class="form-group">
+        <label for="mediaFile">Image / Média optionnel :</label>
+        <input type="file" id="mediaFile" accept="image/*,video/*,application/pdf">
+    </div>
+    <div class="form-group">
+        <label for="message">Message :</label>
+        <textarea id="message" placeholder="Votre message..."></textarea>
+    </div>
+    <button id="btnSend">Envoyer aux <span id="btnCount">0</span> numéros</button>
+
+    <div id="status" class="status"></div>
+    <div id="progress" style="margin-top: 15px; display: none; font-size: 14px;">
+        <p><strong>Progression :</strong> <span id="progSent">0</span> succès / <span id="progFail">0</span> erreurs. Total: <span id="progTotal">0</span></p>
+        <ul id="logList" style="max-height: 150px; overflow-y: auto; font-size: 13px; margin-top: 5px; padding: 10px; background: #f9f9f9; border: 1px solid #eee; border-radius: 4px; list-style-type: none;"></ul>
+    </div>
+
+    <!-- Socket.IO Client -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const btnSend = document.getElementById('btnSend');
+        const statusDiv = document.getElementById('status');
+        const csvFileInput = document.getElementById('csvFile');
+        const mediaFileInput = document.getElementById('mediaFile');
+        const fileStats = document.getElementById('fileStats');
+        const btnCount = document.getElementById('btnCount');
+        const progressDiv = document.getElementById('progress');
+        const progSent = document.getElementById('progSent');
+        const progFail = document.getElementById('progFail');
+        const progTotal = document.getElementById('progTotal');
+        const logList = document.getElementById('logList');
+
+        let targetNumbers = [];
+        let sentCount = 0;
+        let failCount = 0;
+
+        function showStatus(text, isError = false) {
+            statusDiv.textContent = text;
+            statusDiv.style.display = 'block';
+            if (isError) {
+                statusDiv.className = 'status error';
+            } else {
+                statusDiv.className = 'status success';
+            }
+        }
+
+        function addLog(text, color) {
+            const li = document.createElement('li');
+            li.textContent = text;
+            li.style.color = color;
+            li.style.borderBottom = "1px solid #ddd";
+            li.style.padding = "2px 0";
+            logList.insertBefore(li, logList.firstChild);
+        }
+
+        // CSV Parser and Filter
+        csvFileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) {
+                targetNumbers = [];
+                fileStats.textContent = '';
+                btnCount.textContent = '0';
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const text = event.target.result;
+                const lines = text.split(/\r?\n/);
+                let valid = [];
+                let ignoredFixed = 0;
+                let ignoredOther = 0;
+
+                for (let i = 0; i < lines.length; i++) {
+                    const columns = lines[i].split(',');
+                    if (!columns[0]) continue;
+                    
+                    // Extraire uniquement les chiffres (enlève les espaces, +, -, etc.)
+                    let rawPhone = columns[0].replace(/\D/g, '');
+                    if (!rawPhone) continue;
+
+                    // Exclure les fixes : numéros commençant par 05 ou 2125
+                    if (rawPhone.startsWith('05') || rawPhone.startsWith('2125')) {
+                        ignoredFixed++;
+                        continue;
+                    }
+                    
+                    // Garder uniquement les GSM : 06, 07, 2126, 2127
+                    if (rawPhone.startsWith('06') || rawPhone.startsWith('07') || 
+                        rawPhone.startsWith('2126') || rawPhone.startsWith('2127')) {
+                        valid.push(rawPhone);
+                    } else {
+                        // Numéros internationaux ou autres formats invisibles
+                        ignoredOther++;
+                    }
+                }
+
+                // Supprime les doublons
+                targetNumbers = [...new Set(valid)];
+                let doublons = valid.length - targetNumbers.length;
+                
+                fileStats.innerHTML = `
+                    <strong style="color: green;">${targetNumbers.length} numéros valides (Gsm)</strong><br>
+                    <span style="color: red;">${ignoredFixed} lignes fixes (05/2125) ignorées</span><br>
+                    <span style="color: orange;">${ignoredOther} autres/invalides ignorés</span><br>
+                    <span style="color: gray;">${doublons} doublons supprimés</span>
+                `;
+                btnCount.textContent = targetNumbers.length;
+            };
+            reader.readAsText(file);
+        });
+
+        // Send Button Action
+        btnSend.addEventListener('click', async () => {
+            const message = document.getElementById('message').value.trim();
+            const mediaFile = mediaFileInput.files[0];
+
+            if (targetNumbers.length === 0) {
+                showStatus('Veuillez charger un fichier CSV contenant des numéros valides', true);
+                return;
+            }
+            if (!message && !mediaFile) {
+                showStatus('Veuillez écrire un message ou sélectionner un média', true);
+                return;
+            }
+
+            let mediaData = null;
+            if (mediaFile) {
+                try {
+                    btnSend.disabled = true;
+                    btnSend.textContent = 'Préparation du média...';
+                    const base64Data = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result.split(',')[1]);
+                        reader.onerror = error => reject(error);
+                        reader.readAsDataURL(mediaFile);
+                    });
+                    
+                    mediaData = {
+                        data: base64Data,
+                        mimetype: mediaFile.type,
+                        filename: mediaFile.name
+                    };
+                } catch (e) {
+                    showStatus('Erreur lors de la lecture du fichier média', true);
+                    btnSend.disabled = false;
+                    btnSend.textContent = `Envoyer aux ${targetNumbers.length} numéros`;
+                    return;
+                }
+            }
+
+            btnSend.disabled = true;
+            statusDiv.style.display = 'none';
+            
+            // Initialisation des compteurs
+            sentCount = 0;
+            failCount = 0;
+            progSent.textContent = '0';
+            progFail.textContent = '0';
+            progTotal.textContent = targetNumbers.length;
+            logList.innerHTML = '';
+            progressDiv.style.display = 'block';
+
+            btnSend.textContent = 'Envoi en cours (voir progression)...';
+
+            // Boucle pour envoyer (avec une courte pause pour éviter de bloquer Socket.IO)
+            for (let i = 0; i < targetNumbers.length; i++) {
+                const phone = targetNumbers[i];
+                socket.emit('send_message', { 
+                    phoneNumber: phone, 
+                    message: message,
+                    media: mediaData 
+                });
+                
+                // Petite pause de 150ms pour donner au serveur le temps de traiter les messages
+                await new Promise(r => setTimeout(r, 150));
+            }
+            
+            btnSend.textContent = 'Émission terminée. Attente de confirmation WhatsApp...';
+        });
+
+        socket.on('message_success', (data) => {
+            sentCount++;
+            progSent.textContent = sentCount;
+            addLog(`✅ Succès: ${data.phoneNumber}`, 'green');
+            checkIfDone();
+        });
+
+        socket.on('message_error', (errorMsg) => {
+            failCount++;
+            progFail.textContent = failCount;
+            addLog(`❌ Erreur: ${errorMsg}`, 'red');
+            checkIfDone();
+        });
+
+        function checkIfDone() {
+            if (sentCount + failCount >= targetNumbers.length) {
+                btnSend.disabled = false;
+                btnSend.textContent = `Envoyer aux ${targetNumbers.length} numéros`;
+                showStatus('Tous les envois ont été complétés !', failCount > 0);
+            }
+        }
+
+        socket.on('ready', () => {
+            addLog('ℹ️ Le client WhatsApp est connecté et prêt.', 'blue');
+        });
+        
+        socket.on('disconnect', () => {
+             addLog('⚠️ Serveur déconnecté, en attente de reconnexion...', 'orange');
+        });
+    </script>
+</body>
+</html>

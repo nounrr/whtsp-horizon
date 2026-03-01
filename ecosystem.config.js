@@ -1,14 +1,14 @@
 module.exports = {
   apps: [
     {
-      name: 'whatsapp-horizon',
+      name: 'whtsp-horizon',
       script: 'server.js',
       cwd: __dirname,
       exec_mode: 'fork',
       instances: 1,
       watch: false,
       autorestart: true,
-      max_restarts: 50,
+      max_restarts: 9999999999999999999999999,
       min_uptime: '15s',
       exp_backoff_restart_delay: 2000,
       max_memory_restart: '400M',

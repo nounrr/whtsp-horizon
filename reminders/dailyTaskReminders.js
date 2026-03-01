@@ -11,6 +11,100 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function shouldSendSeen() {
+  return String(process.env.WA_SEND_SEEN || 'false').toLowerCase() === 'true';
+}
+
+// ── Delay between each WhatsApp message (ms) ──
+const INTER_MESSAGE_DELAY_MS = 500; // 0.5s
+
+// ── Group tasks by employee tel ──
+function groupTasksByTel(tasks) {
+  const map = new Map();
+  for (const row of tasks) {
+    const tel = String(row.tel || '').trim();
+    if (!tel) continue;
+    if (!map.has(tel)) {
+      map.set(tel, {
+        tel,
+        prenom: row.prenom,
+        name: row.name,
+        tasks: [],
+      });
+    }
+    map.get(tel).tasks.push(row);
+  }
+  return Array.from(map.values());
+}
+
+// ── Build digest message (same format as TaskEmploye front-end) ──
+function buildDigestMessages(employeeTasks, { maxLen = 950 } = {}) {
+  const titles = employeeTasks
+    .map((t) => String(t.description || t.title || `Tâche #${t.id}`).trim())
+    .filter(Boolean);
+
+  const total = titles.length;
+  const lines = [];
+  lines.push('*Rappel des tâches*');
+  lines.push(`Nombre des tâches: ${total}`);
+  titles.forEach((title) => lines.push(`- ${title}`));
+
+  const raw = lines.join('\n');
+  const chunks = splitTextByMaxLen(raw, maxLen);
+  if (chunks.length <= 1) return chunks;
+  return chunks.map((c, idx) =>
+    `*Rappel des tâches* (${idx + 1}/${chunks.length})\n${c.replace(/^\*Rappel des tâches\*\n?/i, '')}`.trim()
+  );
+}
+
+function splitTextByMaxLen(text, maxLen) {
+  const max = Math.max(100, Number(maxLen) || 950);
+  const src = String(text || '');
+  if (src.length <= max) return [src];
+
+  const parts = [];
+  const lines = src.split(/\r?\n/);
+  let buf = '';
+
+  const pushBuf = () => {
+    const trimmed = buf.replace(/\n+$/g, '');
+    if (trimmed) parts.push(trimmed);
+    buf = '';
+  };
+
+  for (const rawLine of lines) {
+    const line = String(rawLine ?? '');
+    if (!line) {
+      if ((buf + '\n').length <= max) {
+        buf += '\n';
+      } else {
+        pushBuf();
+      }
+      continue;
+    }
+    if (line.length > max) {
+      pushBuf();
+      let i = 0;
+      while (i < line.length) {
+        parts.push(line.slice(i, i + max));
+        i += max;
+      }
+      continue;
+    }
+    const next = buf ? `${buf}\n${line}` : line;
+    if (next.length <= max) {
+      buf = next;
+    } else {
+      pushBuf();
+      buf = line;
+    }
+  }
+
+  pushBuf();
+  return parts.length ? parts : [''];
+}
+
+// ── Keep old per-task format for backward compat (unused now but exported) ──
 function makeReminderText(row) {
   const assignee = [row.prenom, row.name].filter(Boolean).join(' ').trim() || '—';
 
@@ -63,8 +157,6 @@ async function fetchTasksToRemindFromApi({ apiBase, apiKey, today, tz, onlyEnvoy
 }
 
 async function fetchTasksToRemind(pool, today, { onlyEnvoyerAuto }) {
-  // In this codebase, envoyer_auto is used as "already sent" for auto reminders.
-  // When filtering is enabled, keep tasks that are NOT marked as sent.
   const whereAuto = onlyEnvoyerAuto ? 'AND (t.envoyer_auto IS NULL OR t.envoyer_auto = 0)' : '';
 
   const sql = `
@@ -105,6 +197,84 @@ async function fetchTasksToRemind(pool, today, { onlyEnvoyerAuto }) {
   return rows;
 }
 
+// ── Shared core: group + digest + send with 0.5s delay ──
+async function sendGroupedReminders({
+  tasks,
+  normalizeToJid,
+  sendMessage,
+  client,
+  today,
+  source,
+  logger,
+}) {
+  const groups = groupTasksByTel(tasks);
+  logger.log(`[reminders] grouped into ${groups.length} employees (today=${today}) [source=${source}]`);
+
+  let sentMessages = 0;
+  let sentEmployees = 0;
+  let failedMessages = 0;
+  let failedEmployees = 0;
+  const errors = [];
+
+  for (const group of groups) {
+    const jid = normalizeToJid(group.tel);
+    const texts = buildDigestMessages(group.tasks, { maxLen: 950 });
+
+    let employeeFailed = false;
+
+    for (const text of texts) {
+      try {
+        if (typeof sendMessage === 'function') {
+          await sendMessage(jid, text, { source, tel: group.tel, today });
+        } else {
+          await client.sendMessage(jid, text, { sendSeen: shouldSendSeen() });
+        }
+        sentMessages++;
+
+        logReminder({
+          type: 'reminder_success',
+          date: today,
+          request: { tel: group.tel, message: text, tasksCount: group.tasks.length },
+          response: { success: true, jid },
+        });
+      } catch (e) {
+        failedMessages++;
+        employeeFailed = true;
+        const errorMsg = e?.message || String(e);
+        errors.push({ tel: group.tel, error: errorMsg });
+        logger.error(`[reminders] send failed tel=${group.tel} err=${errorMsg}`);
+
+        logReminder({
+          type: 'reminder_error',
+          date: today,
+          request: { tel: group.tel },
+          response: { success: false },
+          error: errorMsg,
+        });
+      }
+
+      // 0.5s delay between each message
+      await sleep(INTER_MESSAGE_DELAY_MS);
+    }
+
+    if (employeeFailed) failedEmployees++;
+    else sentEmployees++;
+  }
+
+  return {
+    ok: true,
+    today,
+    totalTasks: tasks.length,
+    employees: groups.length,
+    sentEmployees,
+    failedEmployees,
+    sentMessages,
+    failedMessages,
+    errors,
+    source,
+  };
+}
+
 async function runDailyTaskReminders({
   client,
   pool,
@@ -112,16 +282,16 @@ async function runDailyTaskReminders({
   isWaConnected,
   tz,
   onlyEnvoyerAuto,
+  sendMessage,
   sendDelayMs,
   logger = console,
 }) {
   const today = getTodayDateString(tz);
 
-  // Log début du reminder
   logReminder({
     type: 'reminder_start',
     date: today,
-    request: { source: 'db', tz, onlyEnvoyerAuto }
+    request: { source: 'db', tz, onlyEnvoyerAuto },
   });
 
   if (!isWaConnected()) {
@@ -132,7 +302,7 @@ async function runDailyTaskReminders({
       date: today,
       request: { source: 'db', tz, onlyEnvoyerAuto },
       response: errorResult,
-      error: 'WhatsApp non connecté'
+      error: 'WhatsApp non connecté',
     });
     return errorResult;
   }
@@ -140,59 +310,28 @@ async function runDailyTaskReminders({
   const tasks = await fetchTasksToRemind(pool, today, { onlyEnvoyerAuto });
   logger.log(`[reminders] tasks to remind=${tasks.length} (today=${today})`);
 
-  // Log les tâches trouvées
   logReminder({
     type: 'reminder_tasks_found',
     date: today,
     request: { source: 'db', tz, onlyEnvoyerAuto, tasksCount: tasks.length },
-    response: { tasks: tasks.map(t => ({ id: t.id, tel: t.tel, description: t.description })) }
+    response: { tasks: tasks.map((t) => ({ id: t.id, tel: t.tel, description: t.description })) },
   });
 
-  let sent = 0;
-  let failed = 0;
-  const errors = [];
+  const result = await sendGroupedReminders({
+    tasks,
+    normalizeToJid,
+    sendMessage,
+    client,
+    today,
+    source: 'db',
+    logger,
+  });
 
-  for (const row of tasks) {
-    try {
-      const jid = normalizeToJid(row.tel);
-      const text = makeReminderText(row);
-      await client.sendMessage(jid, text);
-      sent++;
-      
-      // Log succès d'envoi
-      logReminder({
-        type: 'reminder_success',
-        date: today,
-        request: { taskId: row.id, tel: row.tel, message: text },
-        response: { success: true, jid }
-      });
-      
-      if (sendDelayMs) await sleep(sendDelayMs);
-    } catch (e) {
-      failed++;
-      const errorMsg = e?.message || e;
-      errors.push({ taskId: row.id, tel: row.tel, error: errorMsg });
-      logger.error(`[reminders] send failed taskId=${row.id} userTel=${row.tel} err=${errorMsg}`);
-      
-      // Log erreur d'envoi
-      logReminder({
-        type: 'reminder_error',
-        date: today,
-        request: { taskId: row.id, tel: row.tel },
-        response: { success: false },
-        error: errorMsg
-      });
-    }
-  }
-
-  const result = { ok: true, today, total: tasks.length, sent, failed, errors };
-  
-  // Log complétion
   logReminder({
     type: 'reminder_complete',
     date: today,
     request: { source: 'db', tz, onlyEnvoyerAuto },
-    response: result
+    response: result,
   });
 
   return result;
@@ -206,16 +345,16 @@ async function runDailyTaskRemindersViaApi({
   isWaConnected,
   tz,
   onlyEnvoyerAuto,
+  sendMessage,
   sendDelayMs,
   logger = console,
 }) {
   const today = getTodayDateString(tz);
 
-  // Log début du reminder
   logReminder({
     type: 'reminder_start',
     date: today,
-    request: { source: 'api', apiBase, tz, onlyEnvoyerAuto }
+    request: { source: 'api', apiBase, tz, onlyEnvoyerAuto },
   });
 
   if (!isWaConnected()) {
@@ -226,7 +365,7 @@ async function runDailyTaskRemindersViaApi({
       date: today,
       request: { source: 'api', apiBase, tz, onlyEnvoyerAuto },
       response: errorResult,
-      error: 'WhatsApp non connecté'
+      error: 'WhatsApp non connecté',
     });
     return errorResult;
   }
@@ -234,59 +373,28 @@ async function runDailyTaskRemindersViaApi({
   const tasks = await fetchTasksToRemindFromApi({ apiBase, apiKey, today, tz, onlyEnvoyerAuto });
   logger.log(`[reminders] tasks to remind=${tasks.length} (today=${today}) [source=api]`);
 
-  // Log les tâches trouvées
   logReminder({
     type: 'reminder_tasks_found',
     date: today,
     request: { source: 'api', apiBase, tz, onlyEnvoyerAuto, tasksCount: tasks.length },
-    response: { tasks: tasks.map(t => ({ id: t.id, tel: t.tel, description: t.description })) }
+    response: { tasks: tasks.map((t) => ({ id: t.id, tel: t.tel, description: t.description })) },
   });
 
-  let sent = 0;
-  let failed = 0;
-  const errors = [];
+  const result = await sendGroupedReminders({
+    tasks,
+    normalizeToJid,
+    sendMessage,
+    client,
+    today,
+    source: 'api',
+    logger,
+  });
 
-  for (const row of tasks) {
-    try {
-      const jid = normalizeToJid(row.tel);
-      const text = makeReminderText(row);
-      await client.sendMessage(jid, text);
-      sent++;
-      
-      // Log succès d'envoi
-      logReminder({
-        type: 'reminder_success',
-        date: today,
-        request: { taskId: row.id, tel: row.tel, message: text },
-        response: { success: true, jid }
-      });
-      
-      if (sendDelayMs) await sleep(sendDelayMs);
-    } catch (e) {
-      failed++;
-      const errorMsg = e?.message || e;
-      errors.push({ taskId: row.id, tel: row.tel, error: errorMsg });
-      logger.error(`[reminders] send failed taskId=${row.id} userTel=${row.tel} err=${errorMsg}`);
-      
-      // Log erreur d'envoi
-      logReminder({
-        type: 'reminder_error',
-        date: today,
-        request: { taskId: row.id, tel: row.tel },
-        response: { success: false },
-        error: errorMsg
-      });
-    }
-  }
-
-  const result = { ok: true, today, total: tasks.length, sent, failed, errors, source: 'api' };
-  
-  // Log complétion
   logReminder({
     type: 'reminder_complete',
     date: today,
     request: { source: 'api', apiBase, tz, onlyEnvoyerAuto },
-    response: result
+    response: result,
   });
 
   return result;
