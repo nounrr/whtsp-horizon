@@ -12,6 +12,7 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const qrcodeTerminal = require('qrcode-terminal');
+const QRCodeLib = require('qrcode');
 const cron = require('node-cron');
 
 const { createPoolFromEnv } = require('./lib/db');
@@ -206,7 +207,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json({ limit: '1mb' }));
 
-client.on('qr', (qr) => {
+client.on('qr', async (qr) => {
   console.log('QR Code généré');
   isClientReady = false;
   lastQr = qr;
@@ -216,7 +217,13 @@ client.on('qr', (qr) => {
   } catch (e) {
     console.warn('Impossible d\'afficher le QR en ASCII:', e?.message);
   }
-  io.emit('qr', qr);
+  
+  try {
+      const qrDataUrl = await QRCodeLib.toDataURL(qr);
+      io.emit('qr', { qr, qrDataUrl });
+  } catch(e) {
+      io.emit('qr', { qr });
+  }
 });
 
 client.on('ready', () => {
@@ -253,12 +260,17 @@ client.on('change_state', (state) => {
 });
 
 // Gérer les connexions Socket.IO
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
   console.log('Nouveau client connecté');
 
   // Envoyer l'état actuel du client
   if (isClientReady) {
     socket.emit('ready');
+  } else if (lastQr) {
+      try {
+          const qrDataUrl = await QRCodeLib.toDataURL(lastQr);
+          socket.emit('qr', { qr: lastQr, qrDataUrl });
+      } catch(e) {}
   }
 
   socket.on('send_message', async ({ phoneNumber, message, media }) => {
