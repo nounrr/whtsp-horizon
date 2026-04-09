@@ -17,7 +17,7 @@ const cron = require('node-cron');
 
 const { createPoolFromEnv } = require('./lib/db');
 const { runDailyTaskReminders, runDailyTaskRemindersViaApi } = require('./reminders/dailyTaskReminders');
-const { getLogs, getSentMessages, clearLogs, logReminder } = require('./lib/logger');
+const { getLogs, getSentMessages, clearLogs, logReminder, logEESend } = require('./lib/logger');
 const { RateLimitedQueue } = require('./lib/sendQueue');
 
 const app = express();
@@ -274,26 +274,30 @@ io.on('connection', async (socket) => {
   }
 
   socket.on('send_message', async ({ phoneNumber, message, media }) => {
+    const { logEESend } = require('./lib/logger');
     try {
       // Vérifier que le client est prêt
       if (!isClientReady) {
+        logEESend({ phoneNumber, status: 'error', error: 'client_not_ready', message, media });
         socket.emit('message_error', 'Le client WhatsApp n\'est pas encore prêt. Veuillez scanner le QR code.');
         return;
       }
 
       const chatId = normalizeToJid(phoneNumber);
-      
       // Vérifier que le numéro est valide
       const numberId = await client.getNumberId(chatId.replace('@c.us',''));
       if (!numberId) {
+        logEESend({ phoneNumber, status: 'error', error: 'invalid_number', message, media });
         socket.emit('message_error', 'Numéro WhatsApp invalide ou non enregistré');
         return;
       }
 
       await enqueueWaSend(chatId, message, { source: 'socket_io', media });
+      logEESend({ phoneNumber, status: 'success', message, media });
       console.log('Message envoyé à', phoneNumber);
       socket.emit('message_success', { phoneNumber });
     } catch (err) {
+      logEESend({ phoneNumber, status: 'error', error: err.message || 'send_error', message, media });
       console.error('Erreur envoi message ❌', err);
       socket.emit('message_error', err.message || 'Erreur lors de l\'envoi du message');
     }
