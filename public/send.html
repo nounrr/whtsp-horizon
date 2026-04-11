@@ -630,17 +630,13 @@
 
             btnSend.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Envoi en cours...';
 
-            for (let i = 0; i < targetNumbers.length; i++) {
-                const phone = targetNumbers[i];
-                socket.emit('send_message', { 
-                    phoneNumber: phone, 
-                    message: message,
-                    media: mediaData 
-                });
-                
-                await new Promise(r => setTimeout(r, 150));
-            }
-            
+            // Send all numbers in a single batch event so the server enqueues them all at once
+            socket.emit('send_batch', {
+                phones: targetNumbers,
+                message: message,
+                media: mediaData
+            });
+
             btnSend.innerHTML = '<i class="fas fa-hourglass-half"></i> Diffusion dans la file d\'attente...';
         });
 
@@ -657,6 +653,17 @@
                 setConnectionBadge('badge-orange', '<i class="fas fa-circle-notch fa-spin"></i> Reconnexion en cours', `Diffusion mise en attente. ${queuedCount} message(s) restent en file.`);
             }
             addLog('<i class="fas fa-hourglass-half"></i> En file: ' + data.phoneNumber, '#b45309');
+        });
+
+        socket.on('batch_queued', (data) => {
+            queuedCount = Number(data.queued || data.count || 0);
+            const note = data.waitingReconnect
+                ? `Diffusion mise en attente. ${data.count} messages en file.`
+                : `${data.count} messages ajoutés à la file d'envoi.`;
+            showStatus(note, false);
+            if (data.waitingReconnect) {
+                setConnectionBadge('badge-orange', '<i class="fas fa-circle-notch fa-spin"></i> Reconnexion en cours', note);
+            }
         });
 
         socket.on('message_error', (errorMsg) => {

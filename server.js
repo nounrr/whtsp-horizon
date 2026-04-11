@@ -327,6 +327,33 @@ io.on('connection', async (socket) => {
     }
   });
 
+  // Batch send: enqueue all numbers at once, report back per number as they send
+  socket.on('send_batch', ({ phones, message, media }) => {
+    const { logEESend } = require('./lib/logger');
+    if (!Array.isArray(phones) || phones.length === 0) {
+      return socket.emit('batch_queued', { count: 0 });
+    }
+
+    for (const phoneNumber of phones) {
+      enqueueWaSend(null, message, { source: 'socket_io_batch', media, phoneNumber })
+        .then(() => {
+          logEESend({ phoneNumber, status: 'success', message, media });
+          socket.emit('message_success', { phoneNumber });
+        })
+        .catch((err) => {
+          logEESend({ phoneNumber, status: 'error', error: err.message || 'send_error', message, media });
+          socket.emit('message_error', err.message || 'Erreur lors de l\'envoi');
+        });
+    }
+
+    socket.emit('batch_queued', {
+      count: phones.length,
+      queued: waSendQueue.stats().queued,
+      waitingReconnect: !isClientReady || !isWaConnected(),
+    });
+    console.log(`[send_batch] ${phones.length} messages enqueued via socket`);
+  });
+
   socket.on('disconnect', () => {
     console.log('Client déconnecté');
   });
