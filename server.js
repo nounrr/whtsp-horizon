@@ -171,11 +171,21 @@ const waSendQueue = new RateLimitedQueue({
   longPauseMinMs: WA_LONG_PAUSE_MIN_MS,
   longPauseMaxMs: WA_LONG_PAUSE_MAX_MS,
   logger: console,
-  processor: async ({ jid, text, media }) => {
-    // Wait for client to be ready (instead of failing immediately if queue loads before content)
-    while (!isClientReady || !isWaConnected()) {
-      await new Promise(r => setTimeout(r, 2000));
+  processor: async ({ jid, phoneNumber, text, media }) => {
+    await waitForWaReady();
+
+    let targetJid = jid;
+    if (!targetJid && phoneNumber) {
+      targetJid = normalizeToJid(phoneNumber);
+      const numberId = await client.getNumberId(targetJid.replace('@c.us', ''));
+      if (!numberId) {
+        throw new Error('Numéro WhatsApp invalide ou non enregistré');
+      }
     }
+    if (!targetJid) {
+      throw new Error('missing_target_jid');
+    }
+
     const options = { sendSeen: WA_SEND_SEEN };
     if (media && media.data) {
         const { MessageMedia } = require('whatsapp-web.js');
@@ -183,15 +193,38 @@ const waSendQueue = new RateLimitedQueue({
         if (text) {
           options.caption = text;
         }
-        return client.sendMessage(jid, msgMedia, options);
+        return client.sendMessage(targetJid, msgMedia, options);
     }
-    return client.sendMessage(jid, text, options);
+    return client.sendMessage(targetJid, text, options);
   }
 });
 
-async function enqueueWaSend(jid, text, meta = {}) {
-  // Pass data object { jid, text, media } to be persisted
-  return waSendQueue.enqueue({ jid, text, media: meta.media }, { jid, meta });
+async function waitForWaReady() {
+  while (!isClientReady || !isWaConnected()) {
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
+async function enqueueWaSend(target, text, meta = {}) {
+  const payload = {
+    text,
+    media: meta.media,
+  };
+
+  if (meta.phoneNumber) {
+    payload.phoneNumber = meta.phoneNumber;
+  } else {
+    payload.jid = target;
+  }
+
+  return waSendQueue.enqueue(payload, { jid: target || null, phoneNumber: meta.phoneNumber || null, meta });
+}
+
+function triggerReconnect() {
+  if (reinitTimer) return false;
+  if (isClientReady && isWaConnected()) return false;
+  scheduleReinit(0);
+  return true;
 }
 
 // CORS (allow calls from frontend)
@@ -276,29 +309,20 @@ io.on('connection', async (socket) => {
   socket.on('send_message', async ({ phoneNumber, message, media }) => {
     const { logEESend } = require('./lib/logger');
     try {
-      // Vérifier que le client est prêt
-      if (!isClientReady) {
-        logEESend({ phoneNumber, status: 'error', error: 'client_not_ready', message, media });
-        socket.emit('message_error', 'Le client WhatsApp n\'est pas encore prêt. Veuillez scanner le QR code.');
-        return;
-      }
+      const sendPromise = enqueueWaSend(null, message, { source: 'socket_io', media, phoneNumber });
+      socket.emit('message_queued', {
+        phoneNumber,
+        queued: waSendQueue.stats().queued,
+        waitingReconnect: !isClientReady || !isWaConnected(),
+      });
 
-      const chatId = normalizeToJid(phoneNumber);
-      // Vérifier que le numéro est valide
-      const numberId = await client.getNumberId(chatId.replace('@c.us',''));
-      if (!numberId) {
-        logEESend({ phoneNumber, status: 'error', error: 'invalid_number', message, media });
-        socket.emit('message_error', 'Numéro WhatsApp invalide ou non enregistré');
-        return;
-      }
-
-      await enqueueWaSend(chatId, message, { source: 'socket_io', media });
+      await sendPromise;
       logEESend({ phoneNumber, status: 'success', message, media });
-      console.log('Message envoyé à', phoneNumber);
+      console.log('Message envoye a', phoneNumber);
       socket.emit('message_success', { phoneNumber });
     } catch (err) {
       logEESend({ phoneNumber, status: 'error', error: err.message || 'send_error', message, media });
-      console.error('Erreur envoi message ❌', err);
+      console.error('Erreur envoi message', err);
       socket.emit('message_error', err.message || 'Erreur lors de l\'envoi du message');
     }
   });
@@ -316,15 +340,28 @@ function normalizeDigits(p) {
 function normalizePhone(phone) {
   let p = normalizeDigits(phone);
   if (!p) return p;
-  // If starts with 0 and DEFAULT_CC is provided, use it (e.g. 212)
-  if (p.startsWith('0') && process.env.DEFAULT_CC) {
-    p = process.env.DEFAULT_CC.replace(/\D+/g, '') + p.slice(1);
+  if (p.startsWith('00') && p.length > 4) {
+    p = p.slice(2);
   }
-  // If no country code, default to 212 if provided via env or fallback to 212
-  if (!p.startsWith('212') && process.env.DEFAULT_CC) {
-    const cc = process.env.DEFAULT_CC.replace(/\D+/g, '');
-    if (cc && !p.startsWith(cc)) p = cc + p;
+
+  const cc = (process.env.DEFAULT_CC || '').replace(/\D+/g, '');
+  const looksInternational = p.length >= 8 && p.length <= 15 && !p.startsWith('0');
+
+  // Local number with trunk prefix, for example 06... -> 2126...
+  if (p.startsWith('0') && cc) {
+    return cc + p.slice(1);
   }
+
+  // Already looks like an international number, keep it as-is.
+  if (looksInternational) {
+    return p;
+  }
+
+  // Fallback for short local values when a default country code is configured.
+  if (cc) {
+    return cc + p;
+  }
+
   return p;
 }
 
@@ -451,6 +488,17 @@ app.get('/status', async (_req, res) => {
     lastGetState,
     lastGetStateAt,
     now: Date.now()
+  });
+});
+
+app.post('/reconnect', (_req, res) => {
+  const scheduled = triggerReconnect();
+  res.json({
+    ok: true,
+    scheduled,
+    ready: isClientReady,
+    state: lastState,
+    sendQueue: waSendQueue.stats(),
   });
 });
 

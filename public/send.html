@@ -77,6 +77,39 @@
             transition: all 0.3s ease;
         }
 
+        .connection-actions {
+            margin-top: 14px;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .icon-button {
+            border: 1px solid var(--border-color);
+            background: white;
+            color: var(--wa-teal);
+            border-radius: 999px;
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .icon-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .connection-note {
+            margin-top: 12px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
         .badge {
             display: inline-flex;
             align-items: center;
@@ -292,6 +325,12 @@
             <div class="connection-card">
                 <div style="font-size: 14px; color: var(--text-muted); margin-bottom: 5px;">Ã‰tat de la connexion</div>
                 <div><span id="connBadge" class="badge badge-orange"><i class="fas fa-spinner fa-spin"></i> Connexion au serveur...</span></div>
+                <div class="connection-actions">
+                    <button id="btnReconnect" class="icon-button" type="button">
+                        <i class="fas fa-rotate-right"></i> Reconnecter
+                    </button>
+                </div>
+                <div id="connectionNote" class="connection-note">La diffusion continue automatiquement aprÃ¨s reconnexion temporaire.</div>
                 
                 <div id="qrContainer">
                     <p><i class="fas fa-qrcode"></i> Veuillez scanner ce QR Code pour lier l'appareil</p>
@@ -358,10 +397,23 @@
         const progFail = document.getElementById('progFail');
         const progTotal = document.getElementById('progTotal');
         const logList = document.getElementById('logList');
+        const connBadge = document.getElementById('connBadge');
+        const btnReconnect = document.getElementById('btnReconnect');
+        const connectionNote = document.getElementById('connectionNote');
 
         let targetNumbers = [];
         let sentCount = 0;
         let failCount = 0;
+        let queuedCount = 0;
+        let campaignActive = false;
+
+        function setConnectionBadge(type, html, note = '') {
+            connBadge.className = `badge ${type}`;
+            connBadge.innerHTML = html;
+            if (note) {
+                connectionNote.textContent = note;
+            }
+        }
 
         function showStatus(text, isError = false) {
             statusDiv.innerHTML = isError ? `<i class="fas fa-exclamation-circle"></i> ${text}` : `<i class="fas fa-check-circle"></i> ${text}`;
@@ -379,6 +431,82 @@
             li.style.color = color;
             logList.insertBefore(li, logList.firstChild);
         }
+
+        function normalizeImportedPhone(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return null;
+
+            let digits = raw.replace(/[^\d+]/g, '');
+            if (!digits) return null;
+
+            if (digits.startsWith('+')) {
+                digits = digits.slice(1);
+            } else if (digits.startsWith('00')) {
+                digits = digits.slice(2);
+            }
+
+            digits = digits.replace(/\D/g, '');
+            if (!digits) return null;
+
+            if (digits.startsWith('0')) {
+                return digits;
+            }
+
+            if (digits.length >= 8 && digits.length <= 15) {
+                return digits;
+            }
+
+            return null;
+        }
+
+        async function refreshStatus() {
+            try {
+                const res = await fetch('/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                const queue = data.sendQueue || {};
+
+                queuedCount = Number(queue.queued || 0);
+
+                if (data.ready) {
+                    setConnectionBadge('badge-green', '<i class="fas fa-check-circle"></i> Connecté & Prêt', campaignActive ? `Diffusion active. ${queuedCount} message(s) encore en file.` : 'WhatsApp est prêt.');
+                    document.getElementById('qrContainer').style.display = 'none';
+                    btnReconnect.disabled = false;
+                    if (!campaignActive) btnSend.disabled = false;
+                    return;
+                }
+
+                if (data.hasQr) {
+                    setConnectionBadge('badge-orange', '<i class="fas fa-qrcode"></i> QR requis', 'Scanner le QR pour reprendre la diffusion.');
+                    btnReconnect.disabled = false;
+                    btnSend.disabled = true;
+                    return;
+                }
+
+                setConnectionBadge('badge-orange', '<i class="fas fa-circle-notch fa-spin"></i> Reconnexion en cours', campaignActive ? `La diffusion attend la reconnexion. ${queuedCount} message(s) restent en file.` : 'Le service tente de se reconnecter.');
+                btnReconnect.disabled = false;
+                btnSend.disabled = true;
+            } catch (_) {
+                setConnectionBadge('badge-red', '<i class="fas fa-exclamation-triangle"></i> Serveur indisponible', 'Impossible de récupérer l’état du service.');
+                btnReconnect.disabled = true;
+                btnSend.disabled = true;
+            }
+        }
+
+        btnReconnect.addEventListener('click', async () => {
+            btnReconnect.disabled = true;
+            setConnectionBadge('badge-orange', '<i class="fas fa-circle-notch fa-spin"></i> Reconnexion demandée', 'Je relance la connexion WhatsApp et la file continuera ensuite.');
+            try {
+                await fetch('/reconnect', { method: 'POST' });
+            } catch (_) {
+                showStatus('Impossible de demander la reconnexion', true);
+            } finally {
+                setTimeout(() => {
+                    btnReconnect.disabled = false;
+                    refreshStatus();
+                }, 1200);
+            }
+        });
 
         // CSV Parser and Filter
         csvFileInput.addEventListener('change', function(e) {
@@ -399,31 +527,26 @@
                 const text = event.target.result;
                 const lines = text.split(/\r?\n/);
                 let valid = [];
-                let ignoredFixed = 0;
-                let ignoredOther = 0;
+                let ignoredInvalid = 0;
+                let ignoredSuspicious = 0;
 
                 for (let i = 0; i < lines.length; i++) {
                     const columns = lines[i].split(',');
                     if (!columns[0]) continue;
-                    
-                    // Extraire uniquement les chiffres (enlÃ¨ve les espaces, +, -, etc.)
-                    let rawPhone = columns[0].replace(/\D/g, '');
-                    if (!rawPhone) continue;
 
-                    // Exclure les fixes : numÃ©ros commenÃ§ant par 05 ou 2125
-                    if (rawPhone.startsWith('05') || rawPhone.startsWith('2125')) {
-                        ignoredFixed++;
+                    const normalizedPhone = normalizeImportedPhone(columns[0]);
+                    if (!normalizedPhone) {
+                        ignoredInvalid++;
                         continue;
                     }
-                    
-                    // Garder uniquement les GSM : 06, 07, 2126, 2127
-                    if (rawPhone.startsWith('06') || rawPhone.startsWith('07') || 
-                        rawPhone.startsWith('2126') || rawPhone.startsWith('2127')) {
-                        valid.push(rawPhone);
-                    } else {
-                        // NumÃ©ros internationaux ou autres formats invisibles
-                        ignoredOther++;
+
+                    // Basic invalid patterns: too short, too long, or all identical digits.
+                    if (normalizedPhone.length < 8 || normalizedPhone.length > 15 || /^(\d)\1+$/.test(normalizedPhone)) {
+                        ignoredSuspicious++;
+                        continue;
                     }
+
+                    valid.push(normalizedPhone);
                 }
 
                 // Supprime les doublons
@@ -431,9 +554,9 @@
                 let doublons = valid.length - targetNumbers.length;
                 
                 fileStats.innerHTML = `
-                    <div><i class="fas fa-check-circle" style="color: green;"></i> <strong style="color: green;">${targetNumbers.length} numÃ©ros valides (Gsm)</strong></div>
-                    <div style="margin-top: 5px;"><i class="fas fa-times-circle" style="color: red;"></i> <span style="color: red;">${ignoredFixed} NumÃ©ros fixes (05/2125) ignorÃ©s</span></div>
-                    <div style="margin-top: 5px;"><i class="fas fa-exclamation-triangle" style="color: orange;"></i> <span style="color: orange;">${ignoredOther} Formats invalides ignorÃ©s</span></div>
+                    <div><i class="fas fa-check-circle" style="color: green;"></i> <strong style="color: green;">${targetNumbers.length} numÃ©ros valides (formats internationaux acceptÃ©s)</strong></div>
+                    <div style="margin-top: 5px;"><i class="fas fa-times-circle" style="color: red;"></i> <span style="color: red;">${ignoredInvalid} formats vides ou invalides ignorÃ©s</span></div>
+                    <div style="margin-top: 5px;"><i class="fas fa-exclamation-triangle" style="color: orange;"></i> <span style="color: orange;">${ignoredSuspicious} numÃ©ros suspects ignorÃ©s</span></div>
                     <div style="margin-top: 5px;"><i class="fas fa-ban" style="color: gray;"></i> <span style="color: gray;">${doublons} Doublons supprimÃ©s</span></div>
                 `;
                 fileStats.style.display = 'block';
@@ -497,6 +620,8 @@
             // Initialisation des compteurs
             sentCount = 0;
             failCount = 0;
+            queuedCount = 0;
+            campaignActive = true;
             progSent.textContent = '0';
             progFail.textContent = '0';
             progTotal.textContent = targetNumbers.length;
@@ -526,6 +651,14 @@
             checkIfDone();
         });
 
+        socket.on('message_queued', (data) => {
+            queuedCount = Math.max(queuedCount, Number(data.queued || 0));
+            if (data.waitingReconnect) {
+                setConnectionBadge('badge-orange', '<i class="fas fa-circle-notch fa-spin"></i> Reconnexion en cours', `Diffusion mise en attente. ${queuedCount} message(s) restent en file.`);
+            }
+            addLog('<i class="fas fa-hourglass-half"></i> En file: ' + data.phoneNumber, '#b45309');
+        });
+
         socket.on('message_error', (errorMsg) => {
             failCount++;
             progFail.textContent = failCount;
@@ -535,46 +668,52 @@
 
         function checkIfDone() {
             if (sentCount + failCount >= targetNumbers.length) {
+                campaignActive = false;
                 btnSend.disabled = false;
                 btnSend.innerHTML = '<i class="fas fa-paper-plane"></i> Nouvelle diffusion';
                 showStatus('Tous les envois ont été complétés !', failCount > 0);
+                refreshStatus();
             }
         }
 
         socket.on('ready', () => {
-            const connBadge = document.getElementById('connBadge');
-            connBadge.className = 'badge badge-green';
-            connBadge.innerHTML = '<i class="fas fa-check-circle"></i> Connecté & Prêt';
+            setConnectionBadge('badge-green', '<i class="fas fa-check-circle"></i> Connecté & Prêt', campaignActive ? 'WhatsApp reconnecté. La diffusion continue.' : 'WhatsApp est prêt.');
             document.getElementById('qrContainer').style.display = 'none';
-            btnSend.disabled = false;
+            btnReconnect.disabled = false;
+            if (!campaignActive) btnSend.disabled = false;
         });
 
         socket.on('qr', (data) => {
-            const connBadge = document.getElementById('connBadge');
-            connBadge.className = 'badge badge-orange';
-            connBadge.innerHTML = '<i class="fas fa-qrcode"></i> Attente Scan QR...';
+            setConnectionBadge('badge-orange', '<i class="fas fa-qrcode"></i> Attente Scan QR...', 'Scanner le QR pour confirmer la reconnexion et reprendre la diffusion.');
             
             if (data.qrDataUrl) {
                 document.getElementById('qrContainer').style.display = 'block';
                 document.getElementById('qrImage').src = data.qrDataUrl;
             }
+            btnReconnect.disabled = false;
             btnSend.disabled = true;
         });
 
         socket.on('authenticated', () => {
-            const connBadge = document.getElementById('connBadge');
-            connBadge.className = 'badge badge-green';
-            connBadge.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Authentification en cours...';
+            setConnectionBadge('badge-green', '<i class="fas fa-circle-notch fa-spin"></i> Authentification en cours...', 'Validation de la session WhatsApp.');
             document.getElementById('qrContainer').style.display = 'none';
         });
 
-        socket.on('disconnect', () => {
-            const connBadge = document.getElementById('connBadge');
-            connBadge.className = 'badge badge-red';
-            connBadge.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Serveur Déconnecté';
-            document.getElementById('qrContainer').style.display = 'none';
+        socket.on('disconnected', () => {
+            setConnectionBadge('badge-orange', '<i class="fas fa-plug-circle-xmark"></i> WhatsApp déconnecté', campaignActive ? 'La diffusion est en pause et reprendra automatiquement après reconnexion.' : 'Cliquer sur reconnecter pour relancer WhatsApp.');
+            btnReconnect.disabled = false;
             btnSend.disabled = true;
         });
+
+        socket.on('disconnect', () => {
+            setConnectionBadge('badge-red', '<i class="fas fa-exclamation-triangle"></i> Serveur Déconnecté', 'Le navigateur a perdu la connexion avec le serveur.');
+            document.getElementById('qrContainer').style.display = 'none';
+            btnReconnect.disabled = true;
+            btnSend.disabled = true;
+        });
+
+        refreshStatus();
+        setInterval(refreshStatus, 5000);
     </script>
 </body>
 </html>
