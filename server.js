@@ -570,12 +570,7 @@ app.post('/send-text-batch', requireApiKey, async (req, res) => {
     if (rawItems.length > 2000) return res.status(400).json({ ok: false, error: 'too_many_items', max: 2000 });
 
     const batchSize = clampInt(body.batchSize, { min: 1, max: 50, fallback: 10 });
-    const minDelayMs = clampInt(body.minDelaySec, { min: 0, max: 60, fallback: 3 }) * 1000;
-    const maxDelayMs = clampInt(body.maxDelaySec, { min: 0, max: 120, fallback: 10 }) * 1000;
     const batchPauseMs = clampInt(body.batchPauseSec, { min: 0, max: 3600, fallback: 60 }) * 1000;
-
-    const delayMin = Math.min(minDelayMs, maxDelayMs);
-    const delayMax = Math.max(minDelayMs, maxDelayMs);
 
     const items = rawItems.map((it, idx) => {
       const phone = it?.phone ?? it?.to ?? it?.tel ?? it?.recipient;
@@ -584,70 +579,50 @@ app.post('/send-text-batch', requireApiKey, async (req, res) => {
     });
 
     const startedAt = Date.now();
-    let sent = 0;
-    let failed = 0;
     let invalid = 0;
 
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
 
-      const settled = await Promise.allSettled(
-        batch.map(async (item) => {
-          const phone = item.phone;
-          const text = item.text;
-          if (!phone || !text) {
-            invalid++;
-            return { ok: false, skipped: true, reason: 'phone_or_text_missing', idx: item.idx };
-          }
+      for (const item of batch) {
+        const phone = item.phone;
+        const text = item.text;
+        if (!phone || !text) {
+          invalid++;
+          continue;
+        }
 
-          const waitMs = randIntInclusive(delayMin, delayMax);
-          if (waitMs > 0) await sleep(waitMs);
+        const jid = normalizeToJid(phone);
+        enqueueWaSend(jid, text, {
+          source: 'manual_api',
+          endpoint: '/send-text-batch',
+          index: item.idx,
+          phoneNumber: phone,
+        }).catch((e) => {
+          logReminder({
+            type: 'reminder_error',
+            date: new Date().toISOString().split('T')[0],
+            request: { tel: phone, message: text, source: 'manual_api', endpoint: '/send-text-batch' },
+            response: { success: false, jid },
+            error: e?.message || 'unknown'
+          });
+        });
+      }
 
-          const jid = normalizeToJid(phone);
-          try {
-            const msg = await client.sendMessage(jid, text, { sendSeen: WA_SEND_SEEN });
-            sent++;
-            logReminder({
-              type: 'reminder_success',
-              date: new Date().toISOString().split('T')[0],
-              request: { tel: phone, message: text, source: 'manual_api', endpoint: '/send-text-batch' },
-              response: { success: true, jid, messageId: msg.id?._serialized }
-            });
-            return { ok: true, idx: item.idx, jid, id: msg.id?._serialized };
-          } catch (e) {
-            failed++;
-            logReminder({
-              type: 'reminder_error',
-              date: new Date().toISOString().split('T')[0],
-              request: { tel: phone, message: text, source: 'manual_api', endpoint: '/send-text-batch' },
-              response: { success: false, jid },
-              error: e?.message || 'unknown'
-            });
-            return { ok: false, idx: item.idx, jid, error: e?.message || 'unknown' };
-          }
-        })
-      );
-
-      // If more batches remain, wait before next batch
+      // If more batches remain, optionally pause before adding next batch
       const hasMore = i + batchSize < items.length;
       if (hasMore && batchPauseMs > 0) {
         await sleep(batchPauseMs);
       }
-
-      // Avoid unused variable linting if any
-      void settled;
     }
 
     const durationMs = Date.now() - startedAt;
     res.json({
       ok: true,
       requested: items.length,
-      batchSize,
-      delay: { minMs: delayMin, maxMs: delayMax },
-      batchPauseMs,
-      sent,
-      failed,
+      queued: items.length - invalid,
       invalid,
+      nowQueued: waSendQueue.stats().queued,
       durationMs,
     });
   } catch (e) {
