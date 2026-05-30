@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"console.log\\(require\\('whatsapp-web.js/package.json'\\).version\\)\")",
+      "Bash(findstr /R \"WWEBJS_WEB_VERSION CHROME_PATH\")",
+      "Bash(curl -sI \"https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1037607845-alpha.html\")",
+      "Read(//c/Users/med/.claude/projects/c--Users-med-Desktop-horizon-whtsp-service/memory/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\med\\.claude\\projects\\c--Users-med-Desktop-horizon-whtsp-service\\memory"
+    ]
+  }
+}

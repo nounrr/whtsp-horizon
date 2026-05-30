@@ -68,7 +68,12 @@ let client = new Client({
   webVersion: process.env.WWEBJS_WEB_VERSION || undefined,
   // Options pour éviter l'erreur "markedUnread"
   webVersionCache: {
-    type: 'local',
+    // Pin a known-good WhatsApp Web build so the page doesn't navigate/reload
+    // mid-injection (cause of "Execution context was destroyed" on init).
+    type: 'remote',
+    remotePath:
+      process.env.WWEBJS_WEB_VERSION_REMOTE ||
+      'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1037607845-alpha.html',
   }
 });
 
@@ -87,7 +92,10 @@ function createFreshWaClient() {
     qrMaxRetries: 5,
     webVersion: process.env.WWEBJS_WEB_VERSION || undefined,
     webVersionCache: {
-      type: 'local',
+      type: 'remote',
+      remotePath:
+        process.env.WWEBJS_WEB_VERSION_REMOTE ||
+        'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1037607845-alpha.html',
     }
   });
 }
@@ -147,8 +155,26 @@ async function initializeClient(reason = 'startup') {
       await replaceWaClient();
     }
 
-    console.log(`[wa] Initialisation du client WhatsApp (${reason})...`);
-    await client.initialize();
+    let attempts = 0;
+    while (true) {
+      try {
+        console.log(`[wa] Initialisation du client WhatsApp (${reason}, attempt ${attempts + 1})...`);
+        await client.initialize();
+        break;
+      } catch (err) {
+        attempts++;
+        // "Execution context was destroyed" and friends are transient page-navigation
+        // errors during injection. Rebuild the client and retry in place before
+        // falling back to the slower scheduleReinit path.
+        if (isTransientWaError(err) && attempts < 3) {
+          console.warn(`[wa] transient init error (attempt ${attempts}), replacing client and retrying:`, err?.message || err);
+          await replaceWaClient();
+          await sleep(2000);
+          continue;
+        }
+        throw err;
+      }
+    }
     initializedClient = true;
     return true;
   } catch (e) {
