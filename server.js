@@ -51,7 +51,7 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-const client = new Client({
+let client = new Client({
   authStrategy: new LocalAuth({
     clientId: process.env.WWEBJS_CLIENT_ID || undefined,
     dataPath: process.env.WWEBJS_AUTH_DIR || undefined,
@@ -71,6 +71,26 @@ const client = new Client({
     remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
   }
 });
+
+function createFreshWaClient() {
+  return new Client({
+    authStrategy: new LocalAuth({
+      clientId: process.env.WWEBJS_CLIENT_ID || undefined,
+      dataPath: process.env.WWEBJS_AUTH_DIR || undefined,
+    }),
+    puppeteer: {
+      headless: true,
+      executablePath: process.env.CHROME_PATH,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-zygote']
+    },
+    authTimeoutMs: 60000,
+    qrMaxRetries: 5,
+    webVersionCache: {
+      type: 'remote',
+      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+    }
+  });
+}
 
 const REMINDER_SOURCE = (process.env.REMINDER_SOURCE || 'db').toLowerCase(); // 'db' | 'api'
 
@@ -100,6 +120,21 @@ function isTransientWaError(err) {
   return /Session closed|Target closed|Execution context was destroyed|Protocol error/i.test(message);
 }
 
+async function replaceWaClient() {
+  const oldClient = client;
+  if (oldClient) {
+    try {
+      oldClient.removeAllListeners();
+      await oldClient.destroy();
+    } catch (e) {
+      console.warn('[wa] destroy before replacing client failed:', e?.message || e);
+    }
+  }
+  await sleep(1000);
+  client = createFreshWaClient();
+  bindClientEvents();
+}
+
 async function initializeClient(reason = 'startup') {
   if (initializingClient) {
     console.log(`[wa] initialize already in progress (${reason})`);
@@ -108,13 +143,8 @@ async function initializeClient(reason = 'startup') {
 
   initializingClient = true;
   try {
-    if (initializedClient) {
-      try {
-        await client.destroy();
-      } catch (e) {
-        console.warn('[wa] destroy before reinitialize failed:', e?.message || e);
-      }
-      await sleep(1000);
+    if (initializedClient || reason !== 'startup') {
+      await replaceWaClient();
     }
 
     console.log(`[wa] Initialisation du client WhatsApp (${reason})...`);
@@ -295,6 +325,7 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json({ limit: '1mb' }));
 
+function bindClientEvents() {
 client.on('qr', async (qr) => {
   console.log('QR Code généré');
   isClientReady = false;
@@ -348,6 +379,10 @@ client.on('change_state', (state) => {
 });
 
 // Gérer les connexions Socket.IO
+}
+
+bindClientEvents();
+
 io.on('connection', async (socket) => {
   console.log('Nouveau client connecté');
 
