@@ -65,10 +65,10 @@ let client = new Client({
   // Désactiver les fonctionnalités qui peuvent causer des erreurs
   authTimeoutMs: 60000,
   qrMaxRetries: 5,
+  webVersion: process.env.WWEBJS_WEB_VERSION || undefined,
   // Options pour éviter l'erreur "markedUnread"
   webVersionCache: {
-    type: 'remote',
-    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+    type: 'local',
   }
 });
 
@@ -85,9 +85,9 @@ function createFreshWaClient() {
     },
     authTimeoutMs: 60000,
     qrMaxRetries: 5,
+    webVersion: process.env.WWEBJS_WEB_VERSION || undefined,
     webVersionCache: {
-      type: 'remote',
-      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+      type: 'local',
     }
   });
 }
@@ -520,7 +520,10 @@ const REMINDER_CRON = process.env.REMINDER_CRON || cronFromReminderAt(REMINDER_A
 console.log('[config] Final REMINDER_CRON:', REMINDER_CRON);
 const REMINDER_ONLY_ENVOYER_AUTO = (process.env.REMINDER_ONLY_ENVOYER_AUTO || 'true').toLowerCase() !== 'false';
 const REMINDER_SEND_DELAY_MS = process.env.REMINDER_SEND_DELAY_MS ? Number(process.env.REMINDER_SEND_DELAY_MS) : 600;
-const REMINDER_API_BASE = process.env.REMINDER_API_BASE || null; // e.g. https://example.com/api
+const API_BASE_FOR_REMINDERS = process.env.API_BASE
+  ? process.env.API_BASE.replace(/\/$/, '').replace(/\/api$/i, '') + '/api'
+  : null;
+const REMINDER_API_BASE = process.env.REMINDER_API_BASE || API_BASE_FOR_REMINDERS; // e.g. https://example.com/api
 const REMINDER_API_KEY = process.env.REMINDER_API_KEY || process.env.TEMPLATE_API_KEY || null;
 
 function isWaConnected() {

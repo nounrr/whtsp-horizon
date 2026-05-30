@@ -1,3 +1,6 @@
+const apiBase = process.env.API_BASE || 'http://127.0.0.1';
+const reminderApiBase = process.env.REMINDER_API_BASE || `${apiBase.replace(/\/$/, '').replace(/\/api$/i, '')}/api`;
+
 module.exports = {
   apps: [
     {
@@ -21,7 +24,8 @@ module.exports = {
         CHROME_PATH: process.env.CHROME_PATH || '/usr/bin/google-chrome',
         WWEBJS_AUTH_DIR: process.env.WWEBJS_AUTH_DIR || '/var/lib/whatsapp-auth-horizon',
         WWEBJS_CLIENT_ID: process.env.WWEBJS_CLIENT_ID || 'whtsp-horizon',
-        API_BASE: process.env.API_BASE || 'http://127.0.0.1',
+        API_BASE: apiBase,
+        REMINDER_API_BASE: reminderApiBase,
         TEMPLATE_API_KEY: process.env.TEMPLATE_API_KEY || ''
       }
     }
