@@ -1,5 +1,4 @@
 const path = require('path');
-const REMINDER_AT ='19:4';
 
 // Load environment variables from .env (use absolute path so it works under PM2/systemd)
 const dotenvResult = require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -93,6 +92,48 @@ let lastReadyAt = null;
 let lastGetState = null;
 let lastGetStateAt = null;
 let reinitTimer = null;
+let initializingClient = false;
+let initializedClient = false;
+
+function isTransientWaError(err) {
+  const message = String(err?.message || err || '');
+  return /Session closed|Target closed|Execution context was destroyed|Protocol error/i.test(message);
+}
+
+async function initializeClient(reason = 'startup') {
+  if (initializingClient) {
+    console.log(`[wa] initialize already in progress (${reason})`);
+    return false;
+  }
+
+  initializingClient = true;
+  try {
+    if (initializedClient) {
+      try {
+        await client.destroy();
+      } catch (e) {
+        console.warn('[wa] destroy before reinitialize failed:', e?.message || e);
+      }
+      await sleep(1000);
+    }
+
+    console.log(`[wa] Initialisation du client WhatsApp (${reason})...`);
+    await client.initialize();
+    initializedClient = true;
+    return true;
+  } catch (e) {
+    initializedClient = false;
+    isClientReady = false;
+    console.error('[wa] initialize failed:', e?.message || e);
+    if (/SingletonLock|ProcessSingleton|profile directory/i.test(String(e?.message || e))) {
+      console.error('[wa] Chrome profile is locked. Stop duplicate PM2/node/chrome processes using WWEBJS_AUTH_DIR, then remove stale Singleton* files only after those processes are stopped.');
+    }
+    scheduleReinit(15000);
+    return false;
+  } finally {
+    initializingClient = false;
+  }
+}
 
 async function refreshClientState() {
   try {
@@ -130,7 +171,9 @@ function scheduleReinit(delayMs = 3000) {
     reinitTimer = null;
     try {
       console.log('Reinitialisation du client WhatsApp...');
-      client.initialize();
+      initializeClient('reconnect').catch((err) => {
+        console.warn('[wa] reconnect failed:', err?.message || err);
+      });
     } catch (e) {
       console.warn('Erreur lors de la réinitialisation:', e?.message);
     }
@@ -170,8 +213,11 @@ const waSendQueue = new RateLimitedQueue({
   longPauseChance: WA_LONG_PAUSE_CHANCE,
   longPauseMinMs: WA_LONG_PAUSE_MIN_MS,
   longPauseMaxMs: WA_LONG_PAUSE_MAX_MS,
+  maxRetries: process.env.WA_QUEUE_MAX_RETRIES ? Number(process.env.WA_QUEUE_MAX_RETRIES) : 5,
+  retryDelayMs: process.env.WA_QUEUE_RETRY_DELAY_MS ? Number(process.env.WA_QUEUE_RETRY_DELAY_MS) : 30000,
   logger: console,
   processor: async ({ jid, phoneNumber, text, media }) => {
+    try {
     await waitForWaReady();
 
     let targetJid = jid;
@@ -196,6 +242,15 @@ const waSendQueue = new RateLimitedQueue({
         return client.sendMessage(targetJid, msgMedia, options);
     }
     return client.sendMessage(targetJid, text, options);
+    } catch (e) {
+      if (isTransientWaError(e)) {
+        isClientReady = false;
+        lastState = 'DISCONNECTED';
+        e.retryable = true;
+        scheduleReinit(1000);
+      }
+      throw e;
+    }
   }
 });
 
@@ -398,7 +453,8 @@ function normalizeToJid(phone) {
 }
 
 // Daily reminders
-const REMINDER_TZ =  'Africa/Casablanca';
+const REMINDER_TZ = process.env.REMINDER_TZ || 'Africa/Casablanca';
+const REMINDER_AT = process.env.REMINDER_AT || '08:00';
 
 // Reminder time (HH:mm, 24h). Example: '15:57'
 // Lecture depuis .env (REMINDER_AT), sinon par défaut 16:00
@@ -413,7 +469,7 @@ function cronFromReminderAt(reminderAt) {
     console.log('[config] cronFromReminderAt: reminderAt is empty/null');
     return null;
   }
-  const m = String(reminderAt).trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  const m = String(reminderAt).trim().match(/^([01]?\d|2[0-3]):([0-5]?\d)$/);
   if (!m) {
     console.log('[config] cronFromReminderAt: invalid format for', reminderAt);
     return null;
@@ -896,7 +952,7 @@ app.post('/api/send-reminder-test', requireApiKey, async (req, res) => {
   }
 });
 
-client.initialize();
+initializeClient('startup');
 
 // Keep state in sync even if events are missed (WhatsApp Web updates can cause that).
 setInterval(() => {
@@ -919,3 +975,21 @@ server.on('error', (err) => {
   }
   process.exit(1);
 });
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${signal} received, shutting down`);
+  clearTimeout(reinitTimer);
+  try {
+    await client.destroy();
+  } catch (e) {
+    console.warn('[wa] destroy during shutdown failed:', e?.message || e);
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 5000).unref?.();
+}
+
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
