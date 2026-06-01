@@ -68,12 +68,7 @@ let client = new Client({
   webVersion: process.env.WWEBJS_WEB_VERSION || undefined,
   // Options pour éviter l'erreur "markedUnread"
   webVersionCache: {
-    // Pin a known-good WhatsApp Web build so the page doesn't navigate/reload
-    // mid-injection (cause of "Execution context was destroyed" on init).
-    type: 'remote',
-    remotePath:
-      process.env.WWEBJS_WEB_VERSION_REMOTE ||
-      'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1037607845-alpha.html',
+    type: 'local',
   }
 });
 
@@ -92,10 +87,7 @@ function createFreshWaClient() {
     qrMaxRetries: 5,
     webVersion: process.env.WWEBJS_WEB_VERSION || undefined,
     webVersionCache: {
-      type: 'remote',
-      remotePath:
-        process.env.WWEBJS_WEB_VERSION_REMOTE ||
-        'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1037607845-alpha.html',
+      type: 'local',
     }
   });
 }
