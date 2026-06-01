@@ -4,7 +4,17 @@
       "Bash(node -e \"console.log\\(require\\('whatsapp-web.js/package.json'\\).version\\)\")",
       "Bash(findstr /R \"WWEBJS_WEB_VERSION CHROME_PATH\")",
       "Bash(curl -sI \"https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1037607845-alpha.html\")",
-      "Read(//c/Users/med/.claude/projects/c--Users-med-Desktop-horizon-whtsp-service/memory/**)"
+      "Read(//c/Users/med/.claude/projects/c--Users-med-Desktop-horizon-whtsp-service/memory/**)",
+      "Bash(git clone *)",
+      "Bash(findstr /R \".\")",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(node -e \"const p=require\\('C:/Users/med/AppData/Local/Temp/wtspboukir/package.json'\\); console.log\\('ref wweb:', p.dependencies['whatsapp-web.js']\\)\")",
+      "Bash(node -e \"const p=require\\('C:/Users/med/Desktop/horizon/whtsp-service/package.json'\\); console.log\\('yours wweb:', p.dependencies['whatsapp-web.js']\\)\")",
+      "Bash(curl -sI \"https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html\")",
+      "Bash(findstr /R \"HTTP Content-Length\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1037607845-alpha.html\")",
+      "PowerShell(pm2 jlist 2>$null | ConvertFrom-Json | Select-Object name, pm_id, @{n='status';e={$_.pm2_env.status}} | Format-Table -AutoSize)"
     ],
     "additionalDirectories": [
       "c:\\Users\\med\\.claude\\projects\\c--Users-med-Desktop-horizon-whtsp-service\\memory"

@@ -119,6 +119,7 @@ let lastState = 'INIT';
 let lastReadyAt = null;
 let lastGetState = null;
 let lastGetStateAt = null;
+let connectedWithoutReadySince = null;
 let reinitTimer = null;
 let initializingClient = false;
 let initializedClient = false;
@@ -130,6 +131,8 @@ function isTransientWaError(err) {
 
 async function replaceWaClient() {
   const oldClient = client;
+  isClientReady = false;
+  connectedWithoutReadySince = null;
   if (oldClient) {
     try {
       oldClient.removeAllListeners();
@@ -202,13 +205,19 @@ async function refreshClientState() {
       lastState = state;
     }
 
-    // Self-heal: sometimes the WhatsApp Web session is CONNECTED but the 'ready' event never fires.
-    // In that case, allow the service to recover automatically.
+    // CONNECTED can be reported before whatsapp-web.js has fully injected its
+    // runtime. Do not mark the client ready until the real "ready" event fires.
     if (state === 'CONNECTED' && !isClientReady) {
-      console.warn('[wa] state is CONNECTED but isClientReady=false; forcing ready=true');
-      isClientReady = true;
-      lastReadyAt = Date.now();
-      io.emit('ready');
+      if (!connectedWithoutReadySince) {
+        connectedWithoutReadySince = Date.now();
+        console.warn('[wa] state is CONNECTED but ready event has not fired yet; waiting');
+      } else if (Date.now() - connectedWithoutReadySince > 60000) {
+        console.warn('[wa] CONNECTED without ready for more than 60s; scheduling reconnect');
+        connectedWithoutReadySince = Date.now();
+        scheduleReinit(1000);
+      }
+    } else {
+      connectedWithoutReadySince = null;
     }
 
     if (state !== 'CONNECTED' && isClientReady) {
@@ -375,6 +384,8 @@ client.on('ready', () => {
   console.log('Client prêt ✅');
   isClientReady = true;
   lastState = 'CONNECTED';
+  lastQr = null;
+  connectedWithoutReadySince = null;
   lastReadyAt = Date.now();
   io.emit('ready');
 });
