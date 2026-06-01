@@ -120,6 +120,8 @@ let lastReadyAt = null;
 let lastGetState = null;
 let lastGetStateAt = null;
 let connectedWithoutReadySince = null;
+let recoveringReady = false;
+let readyRecoveryFailures = 0;
 let reinitTimer = null;
 let initializingClient = false;
 let initializedClient = false;
@@ -133,6 +135,8 @@ async function replaceWaClient() {
   const oldClient = client;
   isClientReady = false;
   connectedWithoutReadySince = null;
+  recoveringReady = false;
+  readyRecoveryFailures = 0;
   if (oldClient) {
     try {
       oldClient.removeAllListeners();
@@ -144,6 +148,28 @@ async function replaceWaClient() {
   await sleep(1000);
   client = createFreshWaClient();
   bindClientEvents();
+}
+
+async function recoverMissingReady() {
+  if (recoveringReady || isClientReady) return;
+  if (!client || typeof client.inject !== 'function') return;
+
+  recoveringReady = true;
+  try {
+    console.warn('[wa] attempting to recover missing ready event with client.inject()');
+    await client.inject();
+    readyRecoveryFailures = 0;
+  } catch (e) {
+    readyRecoveryFailures++;
+    console.warn('[wa] ready recovery failed:', e?.message || e);
+    if (readyRecoveryFailures >= 3) {
+      console.warn('[wa] ready recovery failed 3 times; scheduling full reconnect');
+      readyRecoveryFailures = 0;
+      scheduleReinit(1000);
+    }
+  } finally {
+    recoveringReady = false;
+  }
 }
 
 async function initializeClient(reason = 'startup') {
@@ -212,12 +238,13 @@ async function refreshClientState() {
         connectedWithoutReadySince = Date.now();
         console.warn('[wa] state is CONNECTED but ready event has not fired yet; waiting');
       } else if (Date.now() - connectedWithoutReadySince > 60000) {
-        console.warn('[wa] CONNECTED without ready for more than 60s; scheduling reconnect');
+        console.warn('[wa] CONNECTED without ready for more than 60s; trying ready recovery');
         connectedWithoutReadySince = Date.now();
-        scheduleReinit(1000);
+        await recoverMissingReady();
       }
     } else {
       connectedWithoutReadySince = null;
+      readyRecoveryFailures = 0;
     }
 
     if (state !== 'CONNECTED' && isClientReady) {
@@ -386,6 +413,7 @@ client.on('ready', () => {
   lastState = 'CONNECTED';
   lastQr = null;
   connectedWithoutReadySince = null;
+  readyRecoveryFailures = 0;
   lastReadyAt = Date.now();
   io.emit('ready');
 });
